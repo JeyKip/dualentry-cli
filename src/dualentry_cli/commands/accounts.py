@@ -23,7 +23,7 @@ def list_accounts(
     from dualentry_cli.main import get_client
 
     client = get_client()
-    _do_list(client, "accounts", "account", limit, offset, all_pages, output, search=search)
+    _do_list(client, "accounts", "account", limit=limit, offset=offset, all_pages=all_pages, output=output, search=search)
 
 
 @app.command("get")

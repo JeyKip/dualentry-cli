@@ -72,7 +72,7 @@ def _build_filter_params(
     return params
 
 
-def _do_list(client, path: str, resource: str, limit: int, offset: int, all_pages: bool, output: str, **filters):
+def _do_list(client, path: str, resource: str, *, limit: int, offset: int, all_pages: bool, output: str, **filters):
     """Shared list logic for all resources."""
     params = _build_filter_params(**filters)
     if all_pages:
@@ -120,6 +120,7 @@ def make_resource_app(
     name: str,
     resource: str,
     path: str,
+    *,
     has_create: bool = True,
     has_update: bool = True,
     has_delete: bool = False,
@@ -138,6 +139,7 @@ def make_resource_app(
 
     @app.command("list")
     def list_cmd(
+        *,
         limit: int = Limit,
         offset: int = Offset,
         all_pages: bool = AllPages,
@@ -157,10 +159,10 @@ def make_resource_app(
             client,
             path,
             resource,
-            limit,
-            offset,
-            all_pages,
-            output,
+            limit=limit,
+            offset=offset,
+            all_pages=all_pages,
+            output=output,
             search=search,
             status=status,
             start_date=start_date,

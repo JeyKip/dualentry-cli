@@ -4,7 +4,15 @@ version = "0.1.17"
 description = "DualEntry accounting CLI"
 requires-python = ">=3.11"
 dependencies = [
-    "typer>=0.12,<1.0",
+    # Floor is 0.26, not 0.12: typer 0.26.0 (2026-05-26) vendored click into
+    # typer._click and dropped click from its own dependencies. That is a
+    # breaking change for us on both counts:
+    #   - typer._click.exceptions does not exist before 0.26, and
+    #   - click is no longer installed transitively, so importing it is not an
+    #     option either (it is not a direct dependency of this project).
+    # HelpfulGroup in cli.py catches typer._click.exceptions.UsageError, which
+    # is the class TyperGroup.resolve_command actually raises.
+    "typer>=0.26,<1.0",
     "httpx>=0.27,<1.0",
     "keyring>=25.0,<26.0",
     "rich>=13.0,<14.0",

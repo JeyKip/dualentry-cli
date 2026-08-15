@@ -182,3 +182,28 @@ class TestErrorHandling:
         result = runner.invoke(app, ["invoices", "create", "--file", str(tmp_path / "missing.json")])
         assert result.exit_code == 1
         assert "not found" in result.output.lower() or "Error" in result.output
+
+
+class TestUnknownCommandSuggestions:
+    """HelpfulGroup must catch typer's UsageError, not click's (see typer >= 0.26)."""
+
+    @pytest.mark.usefixtures("mock_get_client")
+    def test_typo_suggests_closest_command(self):
+        result = runner.invoke(app, ["journal-entrie"])
+        assert result.exit_code == 2
+        assert "Unknown command 'journal-entrie'" in result.output
+        assert "journal-entries" in result.output
+
+    @pytest.mark.usefixtures("mock_get_client")
+    def test_short_prefix_suggests_long_command(self):
+        """cutoff=0.4 catches prefixes that typer's default 0.6 would miss."""
+        result = runner.invoke(app, ["bank"])
+        assert result.exit_code == 2
+        assert "bank-transfers" in result.output
+
+    @pytest.mark.usefixtures("mock_get_client")
+    def test_unmatchable_command_still_shows_help(self):
+        result = runner.invoke(app, ["zzzzzz"])
+        assert result.exit_code == 2
+        assert "Unknown command 'zzzzzz'" in result.output
+        assert "Did you mean" not in result.output

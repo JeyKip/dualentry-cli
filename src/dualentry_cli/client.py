@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -15,6 +16,12 @@ from dualentry_cli import USER_AGENT
 _RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 _MAX_RETRIES = 3
 _RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
+
+# The API replays the original response for a repeated Idempotency-Key instead of
+# running the operation again, so a retried write cannot create a duplicate record.
+# https://docs.dualentry.com/developers/release-notes/2026-08-12
+_IDEMPOTENCY_HEADER = "Idempotency-Key"
+_IDEMPOTENCY_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 class APIError(Exception):
@@ -83,6 +90,14 @@ class DualEntryClient:
         return response.json()
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
+        method = method.upper()
+        if method in _IDEMPOTENCY_METHODS:
+            # One key per logical request, deliberately generated here rather than
+            # per attempt: reusing it across retries is what makes a retry safe.
+            headers = dict(kwargs.pop("headers", None) or {})
+            headers.setdefault(_IDEMPOTENCY_HEADER, str(uuid.uuid4()))
+            kwargs["headers"] = headers
+
         if not self._retry:
             response = self._client.request(method, path, **kwargs)
             return self._handle_response(response)
@@ -138,6 +153,9 @@ class DualEntryClient:
 
     def put(self, path: str, json: dict[str, Any] | None = None) -> dict:
         return self._request("PUT", path, json=json)
+
+    def patch(self, path: str, json: dict[str, Any] | None = None) -> dict:
+        return self._request("PATCH", path, json=json)
 
     def delete(self, path: str) -> dict:
         return self._request("DELETE", path)

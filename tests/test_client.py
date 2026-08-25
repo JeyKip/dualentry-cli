@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -233,3 +234,118 @@ class TestIdempotencyKey:
         self._client(retry=False).post("/invoices/", json={})
 
         assert "Idempotency-Key" in route.calls[0].request.headers
+
+
+class TestRetryAfterAndConflicts:
+    """
+    Retry timing follows the server, and the two meanings of 409 are separated.
+
+    https://docs.dualentry.com/developers/guides/rate-limiting
+    https://docs.dualentry.com/developers/guides/idempotency-and-write-validation
+    """
+
+    BASE = "https://api.dualentry.com/public/v2"
+
+    @pytest.fixture
+    def sleeps(self, monkeypatch):
+        """Record what the client would sleep, without actually sleeping."""
+        recorded = []
+        monkeypatch.setattr("dualentry_cli.client.time", SimpleNamespace(sleep=recorded.append))
+        return recorded
+
+    @staticmethod
+    def _client():
+        from dualentry_cli.client import DualEntryClient
+
+        return DualEntryClient(api_url="https://api.dualentry.com", api_key="test_key", retry=True)
+
+    @respx.mock
+    def test_conflict_with_retry_after_is_retried(self, sleeps):
+        """A 409 with Retry-After means the first request is still running, so retry with the same key."""
+        route = respx.post(f"{self.BASE}/invoices/").mock(
+            side_effect=[
+                httpx.Response(409, headers={"Retry-After": "2"}, json={"errors": {"__all__": ["still processing"]}}),
+                httpx.Response(201, json={"internal_id": 7}),
+            ]
+        )
+
+        data = self._client().post("/invoices/", json={"customer_id": 1})
+
+        assert data == {"internal_id": 7}
+        assert route.call_count == 2
+        assert sleeps == [2], "must wait exactly as long as Retry-After says"
+        keys = {c.request.headers["Idempotency-Key"] for c in route.calls}
+        assert len(keys) == 1, "the retry must reuse the original key"
+
+    @respx.mock
+    def test_conflict_without_retry_after_is_not_retried(self, sleeps):
+        """A 409 without Retry-After means the response was too large to replay; the write did not run again."""
+        from dualentry_cli.client import APIError
+
+        route = respx.post(f"{self.BASE}/invoices/").mock(return_value=httpx.Response(409, json={"errors": {"__all__": ["original response cannot be replayed"]}}))
+
+        with pytest.raises(APIError) as exc:
+            self._client().post("/invoices/", json={"customer_id": 1})
+
+        assert route.call_count == 1
+        assert sleeps == []
+        assert exc.value.status_code == 409
+        assert "256 KB" in exc.value.detail
+
+    @respx.mock
+    def test_rate_limit_waits_for_retry_after_not_the_hardcoded_backoff(self, sleeps):
+        """On 429 the server says how long to wait, and that wins over _RETRY_DELAYS."""
+        respx.get(f"{self.BASE}/invoices/").mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "7"}, json={"errors": {"__all__": ["slow down"]}}),
+                httpx.Response(200, json={"items": [], "count": 0}),
+            ]
+        )
+
+        self._client().get("/invoices/")
+
+        assert sleeps == [7], "Retry-After must win over _RETRY_DELAYS[0] (1s)"
+
+    @respx.mock
+    def test_rate_limit_without_retry_after_falls_back_to_backoff(self, sleeps):
+        """Without the header there is nothing to follow, so the exponential backoff is used."""
+        from dualentry_cli.client import APIError
+
+        respx.get(f"{self.BASE}/invoices/").mock(return_value=httpx.Response(429, json={"errors": {"__all__": ["slow down"]}}))
+
+        with pytest.raises(APIError):
+            self._client().get("/invoices/")
+
+        assert sleeps == [1, 2], "no header, so use the exponential backoff"
+
+    @pytest.mark.parametrize("bad_value", ["next tuesday", "inf", "Infinity", "1e9", "2.5", "-5", ""])
+    @respx.mock
+    def test_unparsable_retry_after_falls_back_to_backoff(self, sleeps, bad_value):
+        """Values int() cannot use fall back to the backoff; "inf" must never reach time.sleep()."""
+        respx.get(f"{self.BASE}/invoices/").mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": bad_value}, json={}),
+                httpx.Response(200, json={"items": [], "count": 0}),
+            ]
+        )
+
+        self._client().get("/invoices/")
+
+        assert sleeps == [1], f"{bad_value!r} should fall back to the backoff"
+
+    @pytest.mark.usefixtures("sleeps")
+    @respx.mock
+    def test_storage_unavailable_is_retried_with_the_same_key(self):
+        """A 503 from idempotency storage should be retried with the same key, as the guide asks."""
+        route = respx.post(f"{self.BASE}/invoices/").mock(
+            side_effect=[
+                httpx.Response(503, json={"errors": {"__all__": ["retry with the same key"]}}),
+                httpx.Response(201, json={"internal_id": 9}),
+            ]
+        )
+
+        data = self._client().post("/invoices/", json={"customer_id": 1})
+
+        assert data == {"internal_id": 9}
+        keys = {c.request.headers["Idempotency-Key"] for c in route.calls}
+        assert len(keys) == 1

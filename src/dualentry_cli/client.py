@@ -23,6 +23,37 @@ _RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
 _IDEMPOTENCY_HEADER = "Idempotency-Key"
 _IDEMPOTENCY_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# 429 and the in-flight 409 both report exactly how long to wait.
+# https://docs.dualentry.com/developers/guides/rate-limiting
+_RETRY_AFTER_HEADER = "Retry-After"
+
+
+def _retry_after_seconds(response: httpx.Response) -> int | None:
+    """Seconds from the Retry-After header, or None if absent or unusable."""
+    raw = response.headers.get(_RETRY_AFTER_HEADER)
+    if raw is None:
+        return None
+    try:
+        # RFC 9110 delay-seconds is a non-negative integer
+        seconds = int(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _is_retryable(response: httpx.Response) -> bool:
+    """
+    Whether this response should be retried with the same idempotency key.
+
+    409 means two different things, told apart by Retry-After:
+    with the header the first request is still running and we should retry;
+    without it the original response was too large to store, the write did not run again
+    https://docs.dualentry.com/developers/guides/idempotency-and-write-validation
+    """
+    if response.status_code == 409:
+        return _retry_after_seconds(response) is not None
+    return response.status_code in _RETRYABLE_STATUS_CODES
+
 
 class APIError(Exception):
     def __init__(self, status_code: int, detail: str):
@@ -68,7 +99,17 @@ class DualEntryClient:
             except Exception:
                 errors = response.text
             raise APIError(422, f"Validation error: {errors}")
+        if status == 409:
+            wait = _retry_after_seconds(response)
+            if wait is not None:
+                raise APIError(409, f"The first request with this idempotency key is still being processed. Retry in {wait:g}s with the same key.")
+            raise APIError(
+                409, "The original response is too large to replay (over 256 KB). The write was not repeated - check whether the record already exists before sending it again."
+            )
         if status == 429:
+            wait = _retry_after_seconds(response)
+            if wait is not None:
+                raise APIError(429, f"Rate limited. Retry after {wait:g}s.")
             raise APIError(429, "Rate limited. Please wait and try again.")
         if status >= 500:
             raise APIError(status, f"Server error ({status}). The API may be temporarily unavailable.")
@@ -105,18 +146,20 @@ class DualEntryClient:
         # Retry logic with visible feedback
         last_error = None
         for attempt in range(_MAX_RETRIES):
+            retry_after = None
             try:
                 response = self._client.request(method, path, **kwargs)
-                if response.status_code not in _RETRYABLE_STATUS_CODES:
+                if not _is_retryable(response):
                     return self._handle_response(response)
+                retry_after = _retry_after_seconds(response)
                 # Retryable error - will retry
                 last_error = APIError(response.status_code, f"Temporary error ({response.status_code})")
             except httpx.RequestError as e:
                 last_error = e
 
             if attempt < _MAX_RETRIES - 1:
-                delay = _RETRY_DELAYS[attempt]
-                print(f"\033[33mRetrying in {delay}s... (attempt {attempt + 2}/{_MAX_RETRIES})\033[0m", file=sys.stderr)
+                delay = retry_after if retry_after is not None else _RETRY_DELAYS[attempt]
+                print(f"\033[33mRetrying in {delay:g}s... (attempt {attempt + 2}/{_MAX_RETRIES})\033[0m", file=sys.stderr)
                 time.sleep(delay)
 
         # Final attempt

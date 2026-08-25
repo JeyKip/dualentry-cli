@@ -346,6 +346,52 @@ class TestRetryAfterAndConflicts:
 
         assert sleeps == [1], f"{bad_value!r} should fall back to the backoff"
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.PoolTimeout,
+            httpx.ConnectError,
+            httpx.ReadError,
+            httpx.WriteError,
+            httpx.CloseError,
+            httpx.RemoteProtocolError,
+        ],
+    )
+    @respx.mock
+    def test_transient_transport_error_is_retried(self, sleeps, error):
+        """These can succeed on a second attempt, so they are retried and then propagate."""
+        route = respx.get(f"{self.BASE}/invoices/").mock(side_effect=error("boom"))
+
+        with pytest.raises(error):
+            self._client().get("/invoices/")
+
+        assert route.call_count == 4
+        assert sleeps == [1, 2, 4]
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            httpx.LocalProtocolError,
+            httpx.UnsupportedProtocol,
+            httpx.ProxyError,
+            httpx.DecodingError,
+            httpx.TooManyRedirects,
+        ],
+    )
+    @respx.mock
+    def test_non_transient_transport_error_is_not_retried(self, sleeps, error):
+        """These fail the same way every time, so they are reported at once."""
+        route = respx.get(f"{self.BASE}/invoices/").mock(side_effect=error("broken"))
+
+        with pytest.raises(error):
+            self._client().get("/invoices/")
+
+        assert route.call_count == 1
+        assert sleeps == []
+
     @pytest.mark.usefixtures("sleeps")
     @respx.mock
     def test_storage_unavailable_is_retried_with_the_same_key(self):

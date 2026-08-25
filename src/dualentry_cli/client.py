@@ -14,6 +14,10 @@ from dualentry_cli import USER_AGENT
 
 # Status codes that should be retried (transient errors)
 _RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+# Transient transport failures. Deliberately excludes LocalProtocolError,
+# UnsupportedProtocol, DecodingError and TooManyRedirects: those fail the same
+# way every time, so retrying only delays the error the user needs to see.
+_RETRYABLE_EXCEPTIONS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 _MAX_RETRIES = 3
 _RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
 
@@ -144,7 +148,6 @@ class DualEntryClient:
             return self._handle_response(response)
 
         # Retry logic with visible feedback
-        last_error = None
         for attempt in range(_MAX_RETRIES):
             retry_after = None
             try:
@@ -152,10 +155,8 @@ class DualEntryClient:
                 if not _is_retryable(response):
                     return self._handle_response(response)
                 retry_after = _retry_after_seconds(response)
-                # Retryable error - will retry
-                last_error = APIError(response.status_code, f"Temporary error ({response.status_code})")
-            except httpx.RequestError as e:
-                last_error = e
+            except _RETRYABLE_EXCEPTIONS:
+                pass
 
             # every retry waits, including the one after the loop
             delay = retry_after if retry_after is not None else _RETRY_DELAYS[attempt]

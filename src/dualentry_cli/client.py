@@ -157,10 +157,10 @@ class DualEntryClient:
             except httpx.RequestError as e:
                 last_error = e
 
-            if attempt < _MAX_RETRIES - 1:
-                delay = retry_after if retry_after is not None else _RETRY_DELAYS[attempt]
-                print(f"\033[33mRetrying in {delay:g}s... (attempt {attempt + 2}/{_MAX_RETRIES})\033[0m", file=sys.stderr)
-                time.sleep(delay)
+            # every retry waits, including the one after the loop
+            delay = retry_after if retry_after is not None else _RETRY_DELAYS[attempt]
+            print(f"\033[33mRetrying in {delay:g}s... (attempt {attempt + 2}/{_MAX_RETRIES + 1})\033[0m", file=sys.stderr)
+            time.sleep(delay)
 
         # Final attempt
         response = self._client.request(method, path, **kwargs)

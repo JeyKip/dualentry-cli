@@ -316,7 +316,20 @@ class TestRetryAfterAndConflicts:
         with pytest.raises(APIError):
             self._client().get("/invoices/")
 
-        assert sleeps == [1, 2], "no header, so use the exponential backoff"
+        assert sleeps == [1, 2, 4], "no header, so use the exponential backoff"
+
+    @respx.mock
+    def test_the_last_attempt_also_waits_for_retry_after(self, sleeps):
+        """Every request after a failure waits, including the final one sent after the loop."""
+        from dualentry_cli.client import APIError
+
+        route = respx.get(f"{self.BASE}/invoices/").mock(return_value=httpx.Response(429, headers={"Retry-After": "3"}, json={}))
+
+        with pytest.raises(APIError):
+            self._client().get("/invoices/")
+
+        assert sleeps == [3, 3, 3], "the request after the loop must wait too"
+        assert route.call_count == len(sleeps) + 1
 
     @pytest.mark.parametrize("bad_value", ["next tuesday", "inf", "Infinity", "1e9", "2.5", "-5", ""])
     @respx.mock

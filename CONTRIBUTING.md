@@ -9,6 +9,22 @@ uv sync --dev
 uv run pre-commit install
 ```
 
+## Dependencies
+
+`uv.lock` is committed, and CI runs `uv sync --dev --locked`, which fails if the lockfile
+is out of date with `pyproject.toml`. So whenever you add, remove, or change a dependency:
+
+```bash
+uv lock          # regenerate uv.lock
+```
+
+Commit the updated `uv.lock` alongside your `pyproject.toml` change, or CI will fail with
+`The lockfile at uv.lock needs to be updated, but --locked was provided`.
+
+To pick up newer versions of existing dependencies, run `uv lock --upgrade` deliberately —
+it is not something that happens on its own. Expect to fix new `ruff` findings when you do,
+since the lint config selects `ALL` rules and each `ruff` release can add more.
+
 ## Running locally
 
 ```bash
@@ -35,7 +51,8 @@ uv run pytest --cov=dualentry_cli --cov-report=term-missing
 1. Create a branch from `main`
 2. Make your changes
 3. Ensure linting and tests pass
-4. Open a PR against `main`
+4. If you touched dependencies, run `uv lock` and commit `uv.lock`
+5. Open a PR against `main`
 
 ## Releasing
 

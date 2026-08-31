@@ -101,6 +101,7 @@ def _transaction_list(
     title: str,
     counterparty_label: str,
     counterparty_field: str,
+    *,
     show_due_date: bool = False,
     show_paid: bool = False,
     show_remaining: bool = False,
@@ -162,6 +163,7 @@ def _transaction_detail(
     record_type: str,
     counterparty_label: str,
     counterparty_field: str,
+    *,
     due_color: str = "green",
     resource: str = "",
 ):

@@ -34,10 +34,6 @@ _RETRY_AFTER_HEADER = "Retry-After"
 _MAX_RETRY_AFTER = 60
 
 
-def _has_retry_after(response: httpx.Response) -> bool:
-    return _RETRY_AFTER_HEADER in response.headers
-
-
 def _retry_after_seconds(response: httpx.Response) -> int | None:
     """Seconds from the Retry-After header, or None if absent or unusable."""
     raw = response.headers.get(_RETRY_AFTER_HEADER)
@@ -61,7 +57,7 @@ def _is_retryable(response: httpx.Response) -> bool:
     https://docs.dualentry.com/developers/guides/idempotency-and-write-validation
     """
     if response.status_code == 409:
-        return _has_retry_after(response)
+        return _RETRY_AFTER_HEADER in response.headers
     return response.status_code in _RETRYABLE_STATUS_CODES
 
 
@@ -132,7 +128,7 @@ class DualEntryClient:
             raise APIError(422, f"Validation error: {errors}")
         if status == 409:
             detail = _server_detail(response)
-            if _has_retry_after(response):
+            if _RETRY_AFTER_HEADER in response.headers:
                 wait = _retry_after_seconds(response)
                 when = f"Retry in {wait}s with the same key." if wait is not None else "Retry shortly with the same key."
                 raise APIError(409, _explain(f"The first request with this idempotency key is still being processed. {when}", detail))

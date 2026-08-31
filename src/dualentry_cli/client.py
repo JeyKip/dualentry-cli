@@ -136,8 +136,7 @@ class DualEntryClient:
                 raise APIError(
                     409,
                     _explain(
-                        "The original response is too large to replay (over 256 KB). "
-                        "The write was not repeated - check whether the record already exists before sending it again.",
+                        "The original response is too large to replay (over 256 KB). The write was not repeated - check whether the record already exists before sending it again.",
                         detail,
                     ),
                 )
